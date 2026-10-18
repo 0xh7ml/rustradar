@@ -1,0 +1,77 @@
+[package]
+name = "rustradar"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88"
+description = "Fast passive subdomain enumeration tool (a Rust re-implementation of the subfinder architecture)"
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/0xh7ml/rustradar"
+homepage = "https://github.com/0xh7ml/rustradar"
+exclude = ["/target", "/plans", "/.github"]
+keywords = ["security", "recon", "subdomain", "osint", "bugbounty"]
+categories = ["command-line-utilities", "network-programming"]
+
+[lib]
+name = "rustradar"
+path = "src/lib.rs"
+
+[[bin]]
+name = "rustradar"
+path = "src/main.rs"
+
+[features]
+default = ["crtsh-sql"]
+# Query crt.sh's public PostgreSQL replica directly before falling back to HTTP.
+crtsh-sql = ["dep:tokio-postgres"]
+
+[dependencies]
+anyhow = "1"
+async-trait = "0.1"
+base64 = "0.22"
+clap = { version = "4.5", features = ["derive", "env", "wrap_help"] }
+dirs = "5"
+futures = "0.3"
+hickory-resolver = { version = "0.24", default-features = false, features = ["tokio-runtime"] }
+percent-encoding = "2"
+rand = "0.8"
+regex = "1"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "gzip", "brotli", "deflate", "socks", "json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "signal", "io-std", "io-util", "fs"] }
+tokio-postgres = { version = "0.7", optional = true }
+url = "2"
+# Self-update (-up): checksum, archive extraction, in-place binary swap.
+sha2 = "0.10"
+flate2 = "1"
+tar = "0.4"
+self-replace = "1"
+
+[target.'cfg(unix)'.dependencies]
+rlimit = "0.10"
+
+[target.'cfg(windows)'.dependencies]
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { version = "1", features = ["test-util", "macros", "rt-multi-thread"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
+
+# `cargo binstall rustradar` downloads the prebuilt release archive (names
+# match .github/workflows/release.yml). binstall falls back from -gnu to the
+# -musl Linux build automatically.
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-v{ version }-{ target }.tar.gz"
+bin-dir = "{ bin }{ binary-ext }"
+pkg-fmt = "tgz"
+
+[package.metadata.binstall.overrides.x86_64-pc-windows-msvc]
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-v{ version }-{ target }.zip"
+pkg-fmt = "zip"

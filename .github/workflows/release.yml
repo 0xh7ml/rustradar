@@ -1,0 +1,129 @@
+# Builds release binaries and publishes a GitHub release when a version tag
+# (vX.Y.Z) is pushed. Asset names must stay in sync with
+# src/runner/update.rs (archive_name), install.sh and the binstall metadata in
+# Cargo.toml:
+#   rustradar-vX.Y.Z-<target>.tar.gz   (Linux, macOS)
+#   rustradar-vX.Y.Z-<target>.zip      (Windows)
+#   SHA256SUMS
+name: Release
+
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+*"]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  verify:
+    name: verify tag and tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tag must match Cargo.toml version
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match Cargo.toml version $version"
+            exit 1
+          fi
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --locked
+
+  build:
+    name: build (${{ matrix.target }})
+    needs: verify
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - { target: x86_64-unknown-linux-musl, os: ubuntu-latest, cross: true }
+          - { target: aarch64-unknown-linux-musl, os: ubuntu-latest, cross: true }
+          - { target: x86_64-apple-darwin, os: macos-latest, cross: false }
+          - { target: aarch64-apple-darwin, os: macos-latest, cross: false }
+          - { target: x86_64-pc-windows-msvc, os: windows-latest, cross: false }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: taiki-e/install-action@v2
+        if: matrix.cross
+        with:
+          tool: cross
+      - name: Build
+        shell: bash
+        run: |
+          if [ "${{ matrix.cross }}" = "true" ]; then
+            cross build --release --locked --target ${{ matrix.target }}
+          else
+            cargo build --release --locked --target ${{ matrix.target }}
+          fi
+      - name: Package
+        shell: bash
+        run: |
+          name="rustradar-${GITHUB_REF_NAME}-${{ matrix.target }}"
+          mkdir dist
+          cp README.md LICENSE dist/
+          if [[ "${{ matrix.target }}" == *windows* ]]; then
+            cp "target/${{ matrix.target }}/release/rustradar.exe" dist/
+            (cd dist && 7z a "../$name.zip" rustradar.exe README.md LICENSE)
+          else
+            cp "target/${{ matrix.target }}/release/rustradar" dist/
+            tar -czf "$name.tar.gz" -C dist rustradar README.md LICENSE
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: |
+            rustradar-*.tar.gz
+            rustradar-*.zip
+          if-no-files-found: error
+
+  release:
+    name: publish release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        run: |
+          cd dist
+          sha256sum rustradar-* > SHA256SUMS
+          cat SHA256SUMS
+      - name: Release notes from CHANGELOG.md
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          awk -v v="[$version]" '/^## \[/ { p = index($0, v) > 0; next } p' CHANGELOG.md > notes.md
+          [ -s notes.md ] || echo "Release $GITHUB_REF_NAME" > notes.md
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          body_path: notes.md
+          prerelease: ${{ contains(github.ref_name, '-') }}
+
+  crates-io:
+    name: publish to crates.io
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: cargo publish (skipped without CARGO_REGISTRY_TOKEN)
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          if [ -z "$CARGO_REGISTRY_TOKEN" ]; then
+            echo "CARGO_REGISTRY_TOKEN is not set; skipping crates.io publish"
+            exit 0
+          fi
+          cargo publish --locked
